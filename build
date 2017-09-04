@@ -1,0 +1,92 @@
+#!/bin/bash
+
+TMP_DIR=./tmp
+IN_DIR=./input
+OUT_DIR=./output
+
+GRUB_EFI32_DIR=/usr/lib/grub/i386-efi
+GRUB_EFI64_DIR=/usr/lib/grub/x86_64-efi
+GRUB_PARAMS="search iso9660 configfile normal memdisk tar boot linux part_msdos part_gpt part_apple configfile help loadenv ls reboot chain search_fs_uuid multiboot fat udf ext2 btrfs ntfs reiserfs xfs lvm ata font efi_gop efi_uga video_bochs video_cirrus gfxterm gfxterm_background gfxterm_menu png"
+
+CONFIG_DIR=$TMP_DIR/config
+
+STAGE1_FILE=$IN_DIR/grub-stage1.cfg
+STAGE2_FILE=$IN_DIR/grub-stage2.cfg
+
+MEMDISK_FILE=memdisk.img
+
+TARGET_X86=bootia32.efi
+TARGET_X86_64=bootx64.efi
+
+TARGET_EFI_IMG=efi.img
+
+function output_log {
+    echo [EFI Image Generator] `date +'%Y-%m-%d %H:%M:%S'`: $@
+}
+
+if [ ! -e /usr/bin/grub-mkimage ]
+then
+    output_log grub-common package not installed. Exiting.
+    exit
+fi
+
+if [ ! -e $GRUB_EFI32_DIR ]
+then
+    output_log grub-efi-ia32-bin package not installed. Exiting.
+    exit
+fi
+
+if [ ! -e $GRUB_EFI64_DIR ]
+then
+    output_log grub-efi-amd64-bin package not installed. Exiting.
+    exit
+fi
+
+if [ ! -e /usr/bin/mformat ]
+then
+    output_log mtools package not installed. Exiting.
+fi
+
+if [ -e $TMP_DIR ]
+then
+    output_log Removing old temporary directory...
+    rm -rf $TMP_DIR
+fi
+
+if [ -e $OUT_DIR ]
+then
+    output_log Removing old output directory...
+    rm -rf $OUT_DIR
+fi
+
+output_log Generating config structure...
+mkdir -p $CONFIG_DIR/boot/grub
+cp $STAGE1_FILE $CONFIG_DIR/boot/grub/grub.cfg
+cp $STAGE2_FILE $CONFIG_DIR/grub.cfg
+
+output_log Generating memory disk image...
+cd $CONFIG_DIR
+tar -cf - boot grub.cfg > ../$MEMDISK_FILE
+cd ..
+
+output_log Generating EFI32 GRUB image...
+grub-mkimage -m "$MEMDISK_FILE" -o $TARGET_X86 --prefix='(memdisk)/boot/grub' -d $GRUB_EFI32_DIR -C xz -O i386-efi $GRUB_PARAMS
+output_log Generating EFI64 GRUB image...
+grub-mkimage -m "$MEMDISK_FILE" -o $TARGET_X86_64 --prefix='(memdisk)/boot/grub' -d $GRUB_EFI64_DIR -C xz -O x86_64-efi $GRUB_PARAMS
+cd ..
+
+output_log Creating target EFI structure
+mkdir -p $OUT_DIR/EFI/BOOT
+cp $TMP_DIR/$TARGET_X86 $OUT_DIR/EFI/BOOT
+cp $TMP_DIR/$TARGET_X86_64 $OUT_DIR/EFI/BOOT
+
+output_log Creating EFI El Torito image...
+cd $OUT_DIR
+mformat -C -f 2880 -L 16 -i $TARGET_EFI_IMG ::
+mcopy -s -i $TARGET_EFI_IMG ./EFI ::/
+cd ..
+
+output_log Cleaning up...
+rm -rf $TMP_DIR
+
+output_log Generation complete.
